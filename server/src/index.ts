@@ -1,96 +1,116 @@
 import 'dotenv/config';
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { WebSocketServer } from 'ws';
 
 import { getEnv } from './env.js';
-import { mapleClient } from './maple.js';
 import type { ChatMessage } from './types.js';
-import { setSseHeaders, writeSseEvent } from './sse.js';
-import { pipeOpenAiLikeStreamToSse } from './openaiSse.js';
+import { getHeaderString, setNoCacheHeaders } from './http.js';
+import { createChatCompletion, streamChatCompletion } from './maple.js';
 
 const env = getEnv();
 
-const app = Fastify({
-  logger: true,
-});
+const app = Fastify({ logger: true });
 
 app.get('/health', async () => ({ ok: true }));
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+await app.register(fastifyStatic, {
+  root: path.join(__dirname, '../public'),
+  prefix: '/',
+});
+
 app.post('/api/text', async (request, reply) => {
+  setNoCacheHeaders(reply);
+
   const body = request.body as { messages?: ChatMessage[]; stream?: boolean };
   const messages = body?.messages ?? [];
   const stream = body?.stream ?? true;
 
-  if (!env.MAPLE_API_KEY || !env.MAPLE_MODEL) {
-    reply.code(500);
-    return { error: 'Server not configured: MAPLE_API_KEY / MAPLE_MODEL' };
-  }
+  const apiKey =
+    getHeaderString(request, 'x-maple-api-key') ?? env.MAPLE_DEFAULT_API_KEY;
+  const model =
+    getHeaderString(request, 'x-maple-model') ?? env.MAPLE_DEFAULT_MODEL;
 
-  const upstream = await mapleClient.createChatCompletion({
-    baseUrl: env.MAPLE_BASE_URL,
-    apiKey: env.MAPLE_API_KEY,
-    model: env.MAPLE_MODEL,
-    messages,
-    stream,
-  });
-
-  if (!upstream.ok) {
-    const text = await upstream.text().catch(() => '');
-    reply.code(upstream.status);
-    return { error: 'Upstream error', status: upstream.status, body: text };
+  if (!apiKey) {
+    reply.code(400);
+    return { error: 'Missing Maple API key. Pass x-maple-api-key header.' };
   }
 
   if (!stream) {
-    const json = await upstream.json();
-    const text: string =
-      json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text ?? '';
+    const text = await createChatCompletion({
+      apiUrl: env.MAPLE_API_URL,
+      apiKey,
+      model,
+      messages,
+    });
+
     return { text };
   }
 
-  setSseHeaders(reply);
+  reply.raw.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
 
-  let finalText = '';
-  await pipeOpenAiLikeStreamToSse({
-    upstream,
+  let closed = false;
+  request.raw.on('close', () => {
+    closed = true;
+  });
+
+  await streamChatCompletion({
+    apiUrl: env.MAPLE_API_URL,
+    apiKey,
+    model,
+    messages,
     onDelta: (delta) => {
-      finalText += delta;
-      writeSseEvent(reply.raw, 'token', { token: delta });
-    },
-    onDone: () => {
-      writeSseEvent(reply.raw, 'done', { text: finalText });
-      reply.raw.end();
+      if (closed) return;
+      reply.raw.write(`data: ${JSON.stringify({ token: delta })}\n\n`);
     },
   });
+
+  if (!closed) {
+    reply.raw.write('data: [DONE]\n\n');
+    reply.raw.end();
+  }
 });
 
-// Naive voice endpoint: placeholders (STT/TTS integration later)
+// Naive voice endpoint: placeholder (STT/TTS integration later)
 app.register(multipart);
-app.post('/api/voice/naive', async (request, reply) => {
-  // For hackathon: keep contract stable; implement later.
-  // We return 501 so the client can fall back to text-only.
+app.post('/api/voice/naive', async (_request, reply) => {
   reply.code(501);
   return { error: 'Not implemented yet (naive STT/TTS)' };
 });
 
-// Streaming voice endpoint: WebSocket (placeholder)
-// Path: /api/voice/stream
-const server = await app.listen({ port: env.PORT, host: '0.0.0.0' });
+// Streaming voice endpoint: WebSocket placeholder
+const serverAddress = await app.listen({ port: env.PORT, host: '0.0.0.0' });
 
 const wss = new WebSocketServer({ noServer: true });
 
-// Upgrade handler
 (app.server as any).on('upgrade', (req: any, socket: any, head: any) => {
   if (req.url !== '/api/voice/stream') return;
-  wss.handleUpgrade(req, socket, head, (ws) => {
+  wss.handleUpgrade(req, socket, head, (ws: any) => {
     wss.emit('connection', ws, req);
   });
 });
 
-wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ type: 'error', message: 'Not implemented yet (streaming STT/TTS)' }));
+wss.on('connection', (ws: any) => {
+  ws.send(
+    JSON.stringify({
+      type: 'error',
+      message: 'Not implemented yet (streaming STT/TTS)',
+    })
+  );
   ws.close();
 });
 
-app.log.info(`Server listening on ${server}`);
+app.log.info(`Server listening on ${serverAddress}`);

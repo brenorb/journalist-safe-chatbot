@@ -2,7 +2,7 @@
 
 Scaffold target (recommended): Expo (React Native).
 
-## Next step
-- `npx create-expo-app apps/mobile --template blank` (from repo root)
+## Current
+- Expo app scaffolded at `apps/mobile-app/`
 
 We can also do Flutter if that’s what the team prefers.

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Journalist Safe Chatbot — Test</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; max-width: 900px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      input, textarea, button { font: inherit; }
+      input, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
+      textarea { min-height: 80px; }
+      button { padding: 10px 14px; border-radius: 10px; border: 1px solid #111; background: #111; color: white; cursor: pointer; }
+      button.secondary { background: white; color: #111; }
+      .card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 14px; margin-top: 14px; }
+      .muted { color: #666; font-size: 12px; }
+      pre { white-space: pre-wrap; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <h1>Journalist Safe Chatbot — Test</h1>
+    <p class="muted">This is a local test UI for the proxy server. It sends requests to <code>/api/text</code> (streaming).</p>
+
+    <div class="card">
+      <div class="row">
+        <div style="flex: 1 1 280px;">
+          <label>Maple API Key (required)</label>
+          <input id="apiKey" placeholder="sk-..." />
+        </div>
+        <div style="flex: 1 1 280px;">
+          <label>Model</label>
+          <input id="model" placeholder="llama-3.3-70b" value="llama-3.3-70b" />
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <label>Message</label>
+        <textarea id="message" placeholder="Type something..."></textarea>
+      </div>
+      <div class="row" style="margin-top: 12px; align-items: center;">
+        <button id="send">Send (stream)</button>
+        <button id="stop" class="secondary">Stop</button>
+        <span class="muted" id="status"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <strong>Assistant</strong>
+      <pre id="out"></pre>
+    </div>
+
+    <script>
+      const apiKeyEl = document.getElementById('apiKey');
+      const modelEl = document.getElementById('model');
+      const messageEl = document.getElementById('message');
+      const outEl = document.getElementById('out');
+      const statusEl = document.getElementById('status');
+      const sendBtn = document.getElementById('send');
+      const stopBtn = document.getElementById('stop');
+
+      let aborter = null;
+
+      function setStatus(s) { statusEl.textContent = s; }
+
+      async function send() {
+        const apiKey = apiKeyEl.value.trim();
+        const model = modelEl.value.trim() || 'llama-3.3-70b';
+        const message = messageEl.value.trim();
+
+        if (!apiKey) { alert('Maple API key is required'); return; }
+        if (!message) { alert('Type a message'); return; }
+
+        outEl.textContent = '';
+        setStatus('streaming...');
+
+        aborter = new AbortController();
+
+        const res = await fetch('/api/text', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-maple-api-key': apiKey,
+            'x-maple-model': model,
+          },
+          body: JSON.stringify({
+            stream: true,
+            messages: [{ role: 'user', content: message }],
+          }),
+          signal: aborter.signal,
+        });
+
+        if (!res.ok) {
+          const t = await res.text().catch(() => '');
+          setStatus(`error (${res.status})`);
+          outEl.textContent = t;
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // parse SSE lines: data: {"token":"..."}
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice('data:'.length).trim();
+            if (payload === '[DONE]') {
+              setStatus('done');
+              return;
+            }
+            try {
+              const json = JSON.parse(payload);
+              if (json.token) outEl.textContent += json.token;
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        setStatus('done');
+      }
+
+      sendBtn.addEventListener('click', () => send().catch((e) => { setStatus('error'); outEl.textContent = String(e); }));
+      stopBtn.addEventListener('click', () => { if (aborter) aborter.abort(); setStatus('stopped'); });
+    </script>
+  </body>
+</html>

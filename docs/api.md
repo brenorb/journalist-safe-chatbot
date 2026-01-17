@@ -5,6 +5,10 @@ Base URL: `/api`
 ## 1) Text-only (MVP)
 
 ### `POST /api/text`
+Headers:
+- `x-maple-api-key`: required (unless the server has `MAPLE_API_KEY` set)
+- `x-maple-model`: optional (defaults to `MAPLE_MODEL` or `llama-3.3-70b`)
+
 Body:
 ```json
 {
@@ -19,12 +23,12 @@ Body:
 Responses:
 - Non-streaming: `200 application/json`
   ```json
-  {"text": "...", "usage": {"inputTokens": 0, "outputTokens": 0}}
+  {"text": "..."}
   ```
 - Streaming: `200 text/event-stream` (SSE)
-  - Events:
-    - `event: token` / `data: {"token":"..."}`
-    - `event: done` / `data: {"text":"..."}`
+  - Lines:
+    - `data: {"token":"..."}` (repeated)
+    - `data: [DONE]`
 
 ## 2) Naive voice (single blob)
 

@@ -19,7 +19,8 @@ A simple mobile-first mental health chatbot for journalists covering high-risk s
 
 ## Repo layout
 - `docs/` — requirements, safety considerations, API contracts
-- `apps/mobile/` — mobile client (to be scaffolded)
+- `apps/mobile-app/` — Expo (React Native) test app
+- `apps/mobile/` — notes/placeholder
 - `server/` — optional thin backend (proxy, auth, redaction, logging controls)
 
 ## Next decisions
