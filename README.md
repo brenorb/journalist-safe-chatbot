@@ -20,6 +20,7 @@ A simple mobile-first mental health chatbot for journalists covering high-risk s
 ## Repo layout
 - `docs/` — requirements, safety considerations, API contracts
 - `apps/mobile-app/` — Expo (React Native) test app
+- `apps/package.json` — helper scripts to run the mobile app from `apps/`
 - `apps/mobile/` — notes/placeholder
 - `server/` — optional thin backend (proxy, auth, redaction, logging controls)
 
@@ -29,3 +30,15 @@ A simple mobile-first mental health chatbot for journalists covering high-risk s
 3. Do we want a backend proxy (recommended) to avoid embedding API keys in the app?
 
 See `docs/requirements.md` to refine scope.
+
+## Quick start
+### Server
+- `cd server && pnpm i && pnpm dev`
+- Open `http://localhost:8787/` (test UI)
+
+### Mobile (Expo)
+Option A (recommended):
+- `cd apps/mobile-app && npm i && npm run ios` (or `npm run android`)
+
+Option B (from `apps/`):
+- `cd apps && npm i && npm run mobile:install && npm run mobile:ios`
