@@ -3,7 +3,7 @@
 Thin proxy server for Maple AI + voice endpoints.
 
 ## Setup
-- Copy `.env.example` → `.env` and fill `MAPLE_API_KEY` and `MAPLE_MODEL`.
+- Copy `.env.example` → `.env` and fill `MAPLE_PROXY_URL`, `MAPLE_API_KEY`, and `MAPLE_MODEL`.
 
 ## Run
 ```bash

@@ -11,7 +11,8 @@ import { WebSocketServer } from 'ws';
 import { getEnv } from './env.js';
 import type { ChatMessage } from './types.js';
 import { getHeaderString, setNoCacheHeaders } from './http.js';
-import { createChatCompletion, streamChatCompletion } from './maple.js';
+import { mapleProxyChatCompletion } from './maple.js';
+import { pipeOpenAiLikeStreamToSse } from './openaiSse.js';
 
 const env = getEnv();
 
@@ -44,14 +45,33 @@ app.post('/api/text', async (request, reply) => {
     return { error: 'Missing Maple API key. Pass x-maple-api-key header.' };
   }
 
-  if (!stream) {
-    const text = await createChatCompletion({
-      apiUrl: env.MAPLE_API_URL,
-      apiKey,
-      model,
-      messages,
-    });
+  if (!env.MAPLE_PROXY_URL) {
+    reply.code(500);
+    return {
+      error:
+        'Server is not configured for Maple. Set MAPLE_PROXY_URL to a running Maple Proxy (OpenAI-compatible). ' +
+        'Direct enclave E2E calls require a browser client (OpenSecret SDK) and cannot run in this Node server.',
+    };
+  }
 
+  const upstream = await mapleProxyChatCompletion({
+    proxyUrl: env.MAPLE_PROXY_URL,
+    apiKey,
+    model,
+    messages,
+    stream,
+  });
+
+  if (!upstream.ok) {
+    const text = await upstream.text().catch(() => '');
+    reply.code(upstream.status);
+    return { error: 'Upstream error', status: upstream.status, body: text };
+  }
+
+  if (!stream) {
+    const json = await upstream.json();
+    const text: string =
+      json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text ?? '';
     return { text };
   }
 
@@ -62,26 +82,18 @@ app.post('/api/text', async (request, reply) => {
     'x-accel-buffering': 'no',
   });
 
-  let closed = false;
-  request.raw.on('close', () => {
-    closed = true;
-  });
-
-  await streamChatCompletion({
-    apiUrl: env.MAPLE_API_URL,
-    apiKey,
-    model,
-    messages,
+  let finalText = '';
+  await pipeOpenAiLikeStreamToSse({
+    upstream,
     onDelta: (delta) => {
-      if (closed) return;
+      finalText += delta;
       reply.raw.write(`data: ${JSON.stringify({ token: delta })}\n\n`);
     },
+    onDone: () => {
+      reply.raw.write('data: [DONE]\n\n');
+      reply.raw.end();
+    },
   });
-
-  if (!closed) {
-    reply.raw.write('data: [DONE]\n\n');
-    reply.raw.end();
-  }
 });
 
 // Naive voice endpoint: placeholder (STT/TTS integration later)
