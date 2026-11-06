@@ -14,43 +14,50 @@ export async function pipeOpenAiLikeStreamToSse(args: {
   const decoder = new TextDecoder();
 
   let buffer = '';
+  let pendingCarriageReturn = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE frames separated by \n\n
+  try {
     while (true) {
-      const idx = buffer.indexOf('\n\n');
-      if (idx === -1) break;
+      const { value, done } = await reader.read();
+      let chunk: string = (pendingCarriageReturn ? '\r' : '') + decoder.decode(value, { stream: !done });
+      // Preserve a CR at the byte boundary until we know whether LF follows.
+      pendingCarriageReturn = !done && chunk.endsWith('\r');
+      if (pendingCarriageReturn) chunk = chunk.slice(0, -1);
+      buffer += chunk.replace(/\r\n?/g, '\n');
 
-      const frame = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
+      while (true) {
+        const idx = buffer.indexOf('\n\n');
+        if (idx === -1) break;
 
-      for (const line of frame.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-
-        const data = trimmed.slice('data:'.length).trim();
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const data = frame.split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice('data:'.length).replace(/^ /, ''))
+          .join('\n')
+          .trim();
         if (data === '[DONE]') {
+          void reader.cancel().catch(() => {});
           onDone();
           return;
         }
+        if (!data) continue;
 
+        let delta: unknown;
         try {
           const json = JSON.parse(data);
-          const delta: string | undefined =
-            json?.choices?.[0]?.delta?.content ??
-            json?.choices?.[0]?.message?.content;
-          if (delta) onDelta(delta);
+          delta = json?.choices?.[0]?.delta?.content ?? json?.choices?.[0]?.message?.content;
         } catch {
-          // ignore partial/invalid lines
+          // Ignore malformed events and keep reading.
+          continue;
         }
+        if (typeof delta === 'string' && delta) onDelta(delta);
       }
-    }
-  }
 
-  onDone();
+      if (done) break;
+    }
+    onDone();
+  } finally {
+    reader.releaseLock();
+  }
 }
